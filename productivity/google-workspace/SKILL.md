@@ -1,0 +1,391 @@
+---
+name: google-workspace
+description: Gmail, Calendar, Drive, Contacts, Sheets, and Docs integration via gws CLI (googleworkspace/cli). Uses OAuth2 with automatic token refresh via bridge script. Requires gws binary.
+version: 2.0.0
+author: Nous Research
+license: MIT
+required_credential_files:
+  - path: google_token.json
+    description: Google OAuth2 token (created by setup script)
+  - path: google_client_secret.json
+    description: Google OAuth2 client credentials (downloaded from Google Cloud Console)
+metadata:
+  hermes:
+    tags: [Google, Gmail, Calendar, Drive, Sheets, Docs, Contacts, Email, OAuth, gws]
+    homepage: https://github.com/NousResearch/hermes-agent
+    related_skills: [himalaya]
+---
+
+# Google Workspace
+
+Gmail, Calendar, Drive, Contacts, Sheets, and Docs — powered by `gws` (Google's official Rust CLI). The skill provides a backward-compatible Python wrapper that handles OAuth token refresh and delegates to `gws`.
+
+## Architecture
+
+```
+google_api.py  →  gws_bridge.py  →  gws CLI
+(argparse compat)  (token refresh)    (Google APIs)
+```
+
+- `setup.py` handles OAuth2 (headless-compatible, works on CLI/Telegram/Discord)
+- `gws_bridge.py` refreshes the Hermes token and injects it into `gws` via `GOOGLE_WORKSPACE_CLI_TOKEN`
+- `google_api.py` provides the same CLI interface as v1 but delegates to `gws`
+
+## References
+
+- `references/gmail-search-syntax.md` — Gmail search operators (is:unread, from:, newer_than:, etc.)
+
+## Scripts
+
+- `scripts/setup.py` — OAuth2 setup (run once to authorize)
+- `scripts/gws_bridge.py` — Token refresh bridge to gws CLI
+- `scripts/google_api.py` — Backward-compatible API wrapper (delegates to gws)
+
+## Prerequisites
+
+Install `gws`:
+
+```bash
+cargo install google-workspace-cli
+# or via npm (recommended, downloads prebuilt binary):
+npm install -g @googleworkspace/cli
+# or via Homebrew:
+brew install googleworkspace-cli
+```
+
+Verify: `gws --version`
+
+## First-Time Setup
+
+The setup is fully non-interactive — you drive it step by step so it works
+on CLI, Telegram, Discord, or any platform.
+
+Define a shorthand first:
+
+```bash
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+GWORKSPACE_SKILL_DIR="$HERMES_HOME/skills/productivity/google-workspace"
+PYTHON_BIN="${HERMES_PYTHON:-python3}"
+if [ -x "$HERMES_HOME/hermes-agent/venv/bin/python" ]; then
+  PYTHON_BIN="$HERMES_HOME/hermes-agent/venv/bin/python"
+fi
+GSETUP="$PYTHON_BIN $GWORKSPACE_SKILL_DIR/scripts/setup.py"
+```
+
+### Step 0: Check if already set up
+
+```bash
+$GSETUP --check
+```
+
+If it prints `AUTHENTICATED`, skip to Usage — setup is already done.
+
+### Step 1: Triage — ask the user what they need
+
+**Question 1: "What Google services do you need? Just email, or also
+Calendar/Drive/Sheets/Docs?"**
+
+- **Email only** → Use the `himalaya` skill instead — simpler setup.
+- **Calendar, Drive, Sheets, Docs (or email + these)** → Continue below.
+- **AppData Folder** → Accessing hidden app data (like LINE/WhatsApp backups) requires the `drive.appdata` scope, which is included by default in the setup script.
+
+**Partial scopes**: Users can authorize only a subset of services. The setup
+script accepts partial scopes and warns about missing ones.
+
+**Question 2: "Does your Google account use Advanced Protection?"**
+
+- **No / Not sure** → Normal setup.
+- **Yes** → Workspace admin must add the OAuth client ID to allowed apps first.
+
+### Step 2: Create OAuth credentials (one-time, ~5 minutes)
+
+Tell the user:
+
+> 1. Go to https://console.cloud.google.com/apis/credentials
+> 2. Create a project (or use an existing one)
+> 3. Enable the APIs you need (Gmail, Calendar, Drive, Sheets, Docs, People)
+> 4. Credentials → Create Credentials → OAuth 2.0 Client ID → Desktop app
+> 5. Download JSON and tell me the file path
+
+```bash
+$GSETUP --client-secret /path/to/client_secret.json
+```
+
+### Step 3: Get authorization URL
+
+```bash
+$GSETUP --auth-url
+```
+
+Send the URL to the user. After authorizing, they paste back the redirect URL or code.
+
+### Step 4: Exchange the code
+
+```bash
+$GSETUP --auth-code "THE_URL_OR_CODE_THE_USER_PASTED"
+```
+
+**Tip**: Users on mobile or messaging platforms (Telegram/Discord) can simply paste the **entire redirect URL** (e.g. `http://localhost:1/?state=...&code=...`) into the `--auth-code` argument. The setup script will automatically extract the valid code from the URL parameters.
+
+### Step 5: Verify
+
+```bash
+$GSETUP --check
+```
+
+Should print `AUTHENTICATED`. Token refreshes automatically from now on.
+
+## Usage
+
+All commands go through the API script:
+
+```bash
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+GWORKSPACE_SKILL_DIR="$HERMES_HOME/skills/productivity/google-workspace"
+PYTHON_BIN="${HERMES_PYTHON:-python3}"
+if [ -x "$HERMES_HOME/hermes-agent/venv/bin/python" ]; then
+  PYTHON_BIN="$HERMES_HOME/hermes-agent/venv/bin/python"
+fi
+GAPI="$PYTHON_BIN $GWORKSPACE_SKILL_DIR/scripts/google_api.py"
+```
+
+### Gmail
+
+```bash
+$GAPI gmail search "is:unread" --max 10
+$GAPI gmail get MESSAGE_ID
+$GAPI gmail send --to user@example.com --subject "Hello" --body "Message text"
+$GAPI gmail send --to user@example.com --subject "Report" --body "<h1>Q4</h1>" --html
+$GAPI gmail reply MESSAGE_ID --body "Thanks, that works for me."
+$GAPI gmail labels
+$GAPI gmail modify MESSAGE_ID --add-labels LABEL_ID
+```
+
+### Retrieving Gmail Attachments
+
+Extracting files (PDFs, Images, Receipts) from emails requires a multi-step process:
+
+1.  **Identify Attachment ID**: Use `$GAPI gmail get MESSAGE_ID` and look in the `payload.parts` array for the `attachmentId` and `filename`.
+2.  **Download Attachment Data**: Use `gws_bridge.py`. The `userId` parameter is **mandatory**.
+    ```bash
+    $GBRIDGE gmail users messages attachments get --params '{"userId": "me", "messageId": "MSG_ID", "id": "ATTACHMENT_ID"}' > attachment.json
+    ```
+3.  **Decode Base64url**: Gmail encodes attachment data in `base64url` format. Use `tr` to convert to standard base64 and decode:
+    ```bash
+    jq -r '.data' attachment.json | tr '_-' '/+' | base64 -d > file.pdf
+    ```
+4.  **Extract Text (if PDF)**:
+    ```bash
+    pdftotext file.pdf -
+    ```
+
+### Calendar
+
+```bash
+$GAPI calendar list
+$GAPI calendar create --summary "Standup" --start 2026-03-01T10:00:00+01:00 --end 2026-03-01T10:30:00+01:00
+$GAPI calendar create --summary "Review" --start ... --end ... --attendees "alice@co.com,bob@co.com"
+$GAPI calendar delete EVENT_ID
+```
+
+### Drive
+
+```bash
+$GAPI drive search "name contains 'quarterly report'" --max 10
+$GAPI drive search "mimeType='application/pdf'" --raw-query --max 5
+
+# Get file content (for text/markdown/binary)
+$GAPI drive get FILE_ID --output local_file.md
+
+# Export Workspace Doc (for Google Docs/Sheets)
+$GAPI drive export DOC_ID --mime-type "text/plain" --output content.txt
+
+# Search AppData folder (hidden space for app backups)
+$GBRIDGE drive files list --params '{"spaces": "appDataFolder"}'
+```
+
+### Contacts
+
+```bash
+$GAPI contacts list --max 20
+```
+
+### Sheets
+
+```bash
+$GAPI sheets get SHEET_ID "Sheet1!A1:D10"
+$GAPI sheets update SHEET_ID "Sheet1!A1:B2" --values '[["Name","Score"],["Alice","95"]]'
+$GAPI sheets append SHEET_ID "Sheet1!A:C" --values '[["new","row","data"]]'
+```
+
+### Docs
+
+```bash
+$GAPI docs get DOC_ID
+```
+
+### LINE/WhatsApp Backups and `drive.appdata`
+
+Even with the `drive.appdata` scope authorized, backups created by official mobile apps (like LINE or WhatsApp) are often:
+- **Encrypted**: The files are binary blobs that cannot be read as plain text.
+- **Isolated**: Google may restrict visibility to the original app's developer key, meaning third-party OAuth clients (like Hermes) might see an empty directory despite having the correct scope.
+
+**Recommendation**: If the user wants to analyze these chat histories, ask them to manually export the chat to a `.txt` file within the mobile app and upload it to a *visible* Google Drive folder.
+
+### Reading Google Docs Content
+
+If the **Google Docs API** is disabled (a common occurrence in minimal Cloud Console projects), `$GAPI docs get` will fail with an "API not enabled" error. Use the **Drive Export** feature via the bridge script to retrieve the document content as plain text without needing the Docs API.
+
+```bash
+# Export a Google Doc to Plain Text (No Docs API required)
+$GBRIDGE drive files export --params '{"fileId": "DOC_ID", "mimeType": "text/plain"}' --output content.txt
+```
+
+**Pitfall: Sanitized/Redacted Documents** — Users sometimes store sanitized versions of their notes (e.g., `Notes (TXT)`) where sensitive keys are partially masked (e.g., `ghp_t7...0ePR`). Before attempting to use a token extracted this way, check if the file name implies it is a backup or export, and look for an original source (like the live Google Doc or local project context). If you see `...` or `***` inside a secret, it is truncated—do not use it.
+
+### Direct gws access (advanced)
+
+For operations not covered by the wrapper (like `export` or `download`), use `gws_bridge.py` directly. Note that `gws` often requires arguments passed as a JSON string via the `--params` flag.
+
+```bash
+GBRIDGE="python3 ~/.hermes/skills/productivity/google-workspace/scripts/gws_bridge.py"
+
+# Export a Google Doc to Plain Text
+# Params: fileId (resource ID), mimeType (target format)
+$GBRIDGE drive files export --params '{"fileId": "FILE_ID", "mimeType": "text/plain"}' --output backup.txt
+
+# Download a binary file (PDF, ZIP, Image) or text/markdown file
+$GBRIDGE drive files get --params '{"fileId": "FILE_ID", "alt": "media"}' --output file.md
+```
+# Upload a file to a specific folder
+# Note: 'upload' is not a command; use 'create' with --upload
+# Params: parents (array of IDs)
+$GBRIDGE drive files create --upload local_file.md --json '{"name": "remote_name.md", "parents": ["FOLDER_ID"]}'
+
+# Update an existing file on Drive with a local version
+# Note: --upload path MUST be a relative path within the current directory.
+# If your file is in /tmp, move it to ./ first.
+$GBRIDGE drive files update --params '{"fileId": "FILE_ID"}' --upload ./local_file.md
+```
+
+### Advanced Drive Searching
+
+Use `--raw-query` for complex Drive API filters:
+
+```bash
+# Search within a specific folder
+$GAPI drive search "'FOLDER_ID' in parents" --raw-query
+
+# Filter by mimeType and name
+$GAPI drive search "name contains 'itinerary' and mimeType='text/markdown'" --raw-query
+```
+
+**Pitfall**: Complex `or` queries (e.g., `name contains 'A' or name contains 'B'`) in the `google_api.py` wrapper may return 400 errors. If a search fails, break it into multiple simple searches or ensure you are using the correct `raw-query` syntax.
+
+### Gmail Attachments (Advanced)
+
+Downloading attachments requires using `gws_bridge.py` to access the raw Gmail API.
+
+1. **Find the Attachment ID**: Get the message payload and look for `parts` with `mimeType` other than `text/html`.
+   ```bash
+   $GBRIDGE gmail users messages get --params '{"userId": "me", "id": "MESSAGE_ID"}'
+   ```
+2. **Download Attachment Metadata**:
+   ```bash
+   $GBRIDGE gmail users messages attachments get --params '{"userId": "me", "messageId": "MESSAGE_ID", "id": "ATTACHMENT_ID"}' > attachment.json
+   ```
+3. **Decode and Save**: Gmail API returns data in URL-safe base64.
+   ```bash
+   # Extract data field, replace safe-chars, decode to binary
+   jq -r '.data' attachment.json | tr '_-' '/+' | base64 -d > filename.pdf
+   ```
+
+## Expected Output
+
+- **Calendar create**: Confirmation with event ID and htmlLink
+- **Drive search**: Array of file objects (id, name, mimeType, webViewLink)
+- **Sheets get/read**: 2D array of cell values
+- **Docs get**: Full document JSON (use `body.content` for text extraction)
+- **Contacts list**: Array of person objects with names, emails, phones
+
+Parse output with `jq` or read JSON directly.
+
+### Robust Identity Retrieval (Gmail Fallback)
+
+If `contacts list` fails (e.g., People API not enabled) or doesn't return the expected result, search Gmail for the person's name to extract their email address from message headers:
+```bash
+$GAPI gmail search "Person Name" --max 10 | jq -r '.messages[].from' | sort -u
+```
+
+### Incremental Event Updates
+
+Avoid using `calendar update` for adding attendees or modifying specific fields, as it performs a full resource replacement and can wipe existing data (like descriptions or other attendees).
+1. **Get current state**: `$GBRIDGE calendar events get --params '{"calendarId": "primary", "eventId": "..."}'`
+2. **Apply Patch**: Use the bridge script with the `patch` method to merge changes.
+   ```bash
+   $GBRIDGE calendar events patch --params '{"calendarId": "primary", "eventId": "EVENT_ID"}' --json '{"attendees": [{"email": "..."}]}'
+   ```
+
+### Context Discovery for Ambiguous Requests
+
+When a user says "again" or "once more" without context:
+1. **List recent/upcoming events**: `$GAPI calendar list` (shows calendars) followed by `$GBRIDGE calendar events list --params '{"calendarId": "primary", "timeMin": "..."}'`.
+2. **Session Search**: Use `session_search` with keywords from the current session (e.g., "燒肉", "Meiling") to find relevant history across sessions.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `People API ... is disabled` | Use Gmail search fallback (see Recipes). |
+| `calendar update` wiped data | Use `patch` via the bridge script instead. |
+| Ambiguous event intent | List events for the current/target month to find candidates. |
+
+Gmail attachments are returned as base64-encoded data. To read the content of a PDF attachment:
+1. Find the `messageId` and `attachmentId` using `$GAPI gmail search` and `$GAPI gmail get`.
+2. Use the bridge script to fetch the attachment and pipe it through decoding and text conversion.
+
+```bash
+# Define aliases (ensure absolute paths to scripts)
+GBRIDGE="python3 ~/.hermes/skills/productivity/google-workspace/scripts/gws_bridge.py"
+
+# Fetch, decode base64, and convert PDF to text
+$GBRIDGE gmail users messages attachments get --params '{"userId": "me", "messageId": "MSG_ID", "id": "ATT_ID"}' \
+  | jq -r '.data' | tr '_-' '/+' | base64 -d > temp.pdf && pdftotext temp.pdf - && rm temp.pdf
+```
+
+## Troubleshooting
+
+1. **Never send email or create/delete events without confirming with the user first.**
+2. **Check auth before first use** — run `setup.py --check`.
+3. **Use the Gmail search syntax reference** for complex queries.
+4. **Calendar times must include timezone** — ISO 8601 with offset or UTC.
+5. **Respect rate limits** — avoid rapid-fire sequential API calls.
+
+### Drive Search and Retrieval
+- **Complex Queries**: When searching with `parent ID`, `mimeType`, or other specific fields, use the `--raw-query` flag in `google_api.py`. Example: `$GAPI drive search "'FOLDER_ID' in parents" --raw-query`. Without this flag, the query is wrapped in `fullText contains '...'`.
+- **Invalid Value (400) Errors**: If you encounter `{"error": {"code": 400, "message": "Invalid Value"}}` when using `name contains '...' or ...`, the `google_api.py` wrapper is failing to parse the complex filter. **Fix**: Break it into multiple simple searches or use the `--raw-query` flag with a valid Google Drive API `q` string.
+- **Reading Text/Markdown Files**: For files uploaded as `text/markdown` or `text/plain`, use the bridge script with `drive files get` and the `alt=media` parameter. The `docs get` command requires the Google Docs API to be enabled, which is often disabled by default even if the Drive API is active.
+  ```bash
+  $GBRIDGE drive files get --params '{"fileId": "FILE_ID", "alt": "media"}' --output local.md
+  ```
+- **Syncing Changes**: To update a file's content on Drive with a local version, use `drive files update --upload`.
+  ```bash
+  $GBRIDGE drive files update --params '{"fileId": "FILE_ID"}' --upload ./local.md
+  ```
+
+## Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `NOT_AUTHENTICATED` | Run setup Steps 2-5 |
+| `REFRESH_FAILED` | Token revoked — redo Steps 3-5 |
+| `gws: command not found` | Install: `npm install -g @googleworkspace/cli` |
+| `HttpError 403` | Missing scope — `$GSETUP --revoke` then redo Steps 3-5 |
+| `HttpError 403: Access Not Configured` | Enable API in Google Cloud Console |
+| Advanced Protection blocks auth | Admin must allowlist the OAuth client ID |
+
+## Revoking Access
+
+```bash
+$GSETUP --revoke
+```
