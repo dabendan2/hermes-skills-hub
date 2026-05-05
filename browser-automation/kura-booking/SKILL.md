@@ -96,21 +96,30 @@ const { chromium } = require('playwright');
     // 7. 第一次確認
     await page.click('#orderOK');
     await page.waitForTimeout(5000);
-    
-    // 8. 最終確認提交
-    await page.click('#orderOK');
-    await page.waitForTimeout(10000);
-    
-    await page.screenshot({ path: 'booking_result.png' });
-    console.log('Booking finished.');
+### 預約腳本 (Parameterized Script)
 
-  } catch (error) {
-    console.error('Booking failed:', error);
-  } finally {
-    await browser.close();
-  }
+本技能附帶一個參數化腳本，位於 `scripts/book.js`。
+
+**使用方法：**
+```bash
+# 語法: node ~/.hermes/skills/kura-booking/scripts/book.js <SHOP_ID> <日期> <時間> <人數>
+# 範例: 預約 90510 分店，7 號，18:30，2 位
+node ~/.hermes/skills/kura-booking/scripts/book.js 90510 7 18_30 2
+```
+
+**參數說明：**
+- `SHOP_ID`: 分店 ID (例如土城金城店為 90510)。
+- `日期`: 該月的日期數字 (例如 7)。
+- `時間`: 格式為 `HH_MM` (例如 `18_30`, `11_00`)。
+- `人數`: 數字 (例如 2)。
+
+**環境變數：**
+腳本會自動從環境中讀取 `E_PAI_KE_EMAIL` 與 `E_PAI_KE_PASSWORD`。
+
+---
+
 ## 關鍵技術細節 (Lessons Learned)
-0. **重複預約限制**: **同一帳號在同一家分店只能擁有一筆有效的預約**。
+
     - **快速判定**: 在分店頁面（`shop/[ID]`）右側側邊欄，若已存在預約，原本綠色的「預約」按鈕會消失，取而代之的是灰色文字「**已完成候位**」。
     - **預約清單**: 導航至 `https://e-pai-ke.com/reservationA` 檢查是否有「指定時間預約」狀態的項目。
 1. **延遲載入機制**: 開啟預約彈窗後，**必須等待約 10 秒**再點擊日期選擇器 (`#reserve_date`)。
