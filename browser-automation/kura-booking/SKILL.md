@@ -96,9 +96,31 @@ const { chromium } = require('playwright');
     // 7. 第一次確認
     await page.click('#orderOK');
     await page.waitForTimeout(5000);
+### 取消預約腳本 (Parameterized Cancel Script)
+
+本技能附帶一個參數化取消腳本，位於 `scripts/cancel.js`。
+
+**使用方法：**
+```bash
+# 語法: node ~/.hermes/skills/kura-booking/scripts/cancel.js "<日期字串>"
+# 範例: 取消 5月 7號 的預約
+node ~/.hermes/skills/kura-booking/scripts/cancel.js "05月 07"
+```
+
+**參數說明：**
+- `<日期字串>`: 必須與 E排客 介面上顯示的日期格式一致（例如 "05月 07"）。腳本會搜尋包含該字串的預約項目並點擊對應的取消按鈕。
+
+---
+
 ### 預約腳本 (Parameterized Script)
 
 本技能附帶一個參數化腳本，位於 `scripts/book.js`。
+
+**環境準備：**
+初次使用前，請在腳本目錄執行：
+```bash
+cd ~/.hermes/skills/kura-booking/scripts/ && npm install playwright
+```
 
 **使用方法：**
 ```bash
@@ -106,6 +128,13 @@ const { chromium } = require('playwright');
 # 範例: 預約 90510 分店，7 號，18:30，2 位
 node ~/.hermes/skills/kura-booking/scripts/book.js 90510 7 18_30 2
 ```
+
+---
+
+## 避坑指南 (Pitfalls)
+1. **不要搜尋舊檔案**: 當任務是執行預約時，**優先使用 `book.js` 直接操作**。不要花費時間在 `clawhub` (hermes-skills-hub) 或本地目錄中搜尋過往的 log 或截圖檔案，除非預約本身失敗需要調試。
+2. **Shop ID 優先級**: 優先查閱 `references/` 或記憶中的 Shop ID，不要每次都重新搜尋分店，以實現「最快路徑優先」。
+3. **低 RAM 穩定性**: 在 2GB RAM 環境下，避免同時開啟多個瀏覽器分頁。
 
 **參數說明：**
 - `SHOP_ID`: 分店 ID (例如土城金城店為 90510)。
