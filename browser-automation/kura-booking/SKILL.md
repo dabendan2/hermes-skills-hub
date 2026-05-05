@@ -56,6 +56,15 @@ const { chromium } = require('playwright');
 
     // 2. 導航至特定分店 (以土城金城店為例)
     await page.goto('https://e-pai-ke.com/shop/90510', { waitUntil: 'networkidle' });
+    
+    // 2.1 快速檢查是否有重複預約 (已完成候位 字串判定)
+    const sidebarText = await page.innerText('body');
+    if (sidebarText.includes('已完成候位')) {
+        console.log('ERROR: Already have an active reservation for this shop (Detected "已完成候位").');
+        await page.screenshot({ path: 'duplicate_detected.png' });
+        process.exit(1);
+    }
+
     await page.click('a.bookbtn:has-text("預約")');
     
     // 3. 關鍵：等待數據載入後再開啟日期選擇器
@@ -100,10 +109,13 @@ const { chromium } = require('playwright');
   } finally {
     await browser.close();
   }
-})();
-```
+## 關鍵技術細節 (Lessons Learned)
+0. **重複預約限制**: **同一帳號在同一家分店只能擁有一筆有效的預約**。
+    - **快速判定**: 在分店頁面（`shop/[ID]`）右側側邊欄，若已存在預約，原本綠色的「預約」按鈕會消失，取而代之的是灰色文字「**已完成候位**」。
+    - **預約清單**: 導航至 `https://e-pai-ke.com/reservationA` 檢查是否有「指定時間預約」狀態的項目。
+1. **延遲載入機制**: 開啟預約彈窗後，**必須等待約 10 秒**再點擊日期選擇器 (`#reserve_date`)。
 
 ## 錯誤偵測
 - **日期不可選**: 檢查日曆 `<a>` 標籤是否帶有 `dateNo` 類別且點擊後無反應。
 - **時段缺失**: 若點擊日期後 10 秒內 `#future_reserve_button` 仍為空，代表該日已完全額滿。
-- **重複預約**: 系統會提示「每個帳號每次僅能預約一筆」，需先取消舊預約。
+- **重複預約**: 系統會提示「每個帳號每次僅能預約一筆」，需先取消舊預約。腳本應檢查是否出現 `alert` 或特定錯誤文字。
