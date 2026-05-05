@@ -11,7 +11,7 @@ const FAVORITE_SHOPS = {
 // Usage: node book.js <SHOP_ID_OR_NAME> <DATE_DAY> <TIME_HH_MM> <PEOPLE_COUNT>
 let SHOP_INPUT = process.argv[2];
 const DATE_DAY = process.argv[3];
-const TIME_HH_MM = process.argv[4];
+const TIME_HH_MM = process.argv[4]; // Should handle both 18_30 or 18_min_30
 const PEOPLE_COUNT = process.argv[5];
 
 if (!SHOP_INPUT || !DATE_DAY || !TIME_HH_MM || !PEOPLE_COUNT) {
@@ -36,32 +36,30 @@ const SHOP_ID = FAVORITE_SHOPS[SHOP_INPUT] || SHOP_INPUT;
     };
 
     try {
-        console.log(`Attempting reservation for ${SHOP_INPUT} (${SHOP_ID}) on day ${DATE_DAY} at ${TIME_HH_MM} for ${PEOPLE_COUNT} people.`);
+        console.log(`Booking for Shop: ${SHOP_INPUT} (ID: ${SHOP_ID}), Date: ${DATE_DAY}, Time: ${TIME_HH_MM}, People: ${PEOPLE_COUNT}`);
 
-        // Login
         await page.goto('https://e-pai-ke.com/login', { waitUntil: 'networkidle' });
         await page.fill('input[placeholder="電子郵件"]', process.env.E_PAI_KE_EMAIL);
         await page.fill('input[placeholder="密碼"]', process.env.E_PAI_KE_PASSWORD);
         await page.click('button:has-text("登入")');
         await page.waitForTimeout(5000);
 
-        // Navigate to Shop
         await page.goto(`https://e-pai-ke.com/shop/${SHOP_ID}`, { waitUntil: 'networkidle' });
         
         const bodyText = await page.innerText('body');
         if (bodyText.includes('已完成候位')) {
-            console.log('ERROR: Already have an active reservation for this shop.');
-            await takeScreenshot('duplicate_reservation');
+            console.log('ERROR: Already have an active reservation.');
+            await takeScreenshot('duplicate_reservation_details');
             process.exit(0);
         }
 
         await page.click('a.bookbtn:has-text("預約")');
+        console.log('Waiting 10s for background data...');
         await page.waitForTimeout(10000);
         
         await page.click('#reserve_date');
         await page.waitForTimeout(3000);
 
-        // Select Date
         const dateSelected = await page.evaluate((day) => {
             const d = Array.from(document.querySelectorAll('.ui-datepicker-calendar a')).find(a => a.innerText.trim() === day);
             if (d) { d.click(); return true; }
@@ -69,20 +67,21 @@ const SHOP_ID = FAVORITE_SHOPS[SHOP_INPUT] || SHOP_INPUT;
         }, DATE_DAY);
 
         if (!dateSelected) throw new Error(`Date ${DATE_DAY} not available.`);
-        await page.waitForTimeout(8000);
+        await page.waitForTimeout(8000); // Increased wait for time slots
 
-        // Select Time (Website uses #hour_HH_min_MM)
-        const timeId = `hour_${TIME_HH_MM.replace('_', '_min_')}`;
-        const timeSelector = `#${timeId}`;
+        // Select Time - Robust handling for _min_ format
+        const timeId = TIME_HH_MM.includes('_min_') ? TIME_HH_MM : TIME_HH_MM.replace('_', '_min_');
+        const timeSelector = `[id^="hour_${timeId}"], #hour_${timeId}`;
         
-        if (!await page.$(timeSelector)) {
-            const available = await page.evaluate(() => Array.from(document.querySelectorAll('[id^="hour_"]')).map(el => el.id));
-            throw new Error(`Time slot ${timeId} not found. Available slots: ${available.join(', ')}`);
+        console.log(`Looking for time selector: ${timeSelector}`);
+        const timeBtn = await page.$(timeSelector);
+        if (!timeBtn) {
+            await takeScreenshot('time_slots_not_loaded');
+            throw new Error(`Time slot ${TIME_HH_MM} (ID: ${timeId}) not found.`);
         }
-        await page.click(timeSelector);
+        await timeBtn.click();
         await page.waitForTimeout(3000);
 
-        // Select People
         await page.evaluate((count) => {
             const li = document.querySelector(`#optArea li[data-sub="${count}"]`);
             if (li) li.click();
@@ -91,14 +90,13 @@ const SHOP_ID = FAVORITE_SHOPS[SHOP_INPUT] || SHOP_INPUT;
         }, PEOPLE_COUNT);
         await page.waitForTimeout(2000);
         
-        // Confirmations
         await page.click('#orderOK');
         await page.waitForTimeout(5000);
         await page.click('#orderOK');
         await page.waitForTimeout(10000);
         
         await takeScreenshot('booking_result');
-        console.log('Booking process completed successfully.');
+        console.log('Booking process completed.');
 
     } catch (error) {
         console.error('Booking failed:', error.message);
