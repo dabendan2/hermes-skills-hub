@@ -11,7 +11,7 @@ const FAVORITE_SHOPS = {
 // Usage: node book.js <SHOP_ID_OR_NAME> <DATE_DAY> <TIME_HH_MM> <PEOPLE_COUNT>
 let SHOP_INPUT = process.argv[2];
 const DATE_DAY = process.argv[3];
-const TIME_HH_MM = process.argv[4]; // Should handle both 18_30 or 18_min_30
+const TIME_HH_MM = process.argv[4];
 const PEOPLE_COUNT = process.argv[5];
 
 if (!SHOP_INPUT || !DATE_DAY || !TIME_HH_MM || !PEOPLE_COUNT) {
@@ -49,7 +49,6 @@ const SHOP_ID = FAVORITE_SHOPS[SHOP_INPUT] || SHOP_INPUT;
         const bodyText = await page.innerText('body');
         if (bodyText.includes('已完成候位')) {
             console.log('ERROR: Already have an active reservation.');
-            await takeScreenshot('duplicate_reservation_details');
             process.exit(0);
         }
 
@@ -67,18 +66,36 @@ const SHOP_ID = FAVORITE_SHOPS[SHOP_INPUT] || SHOP_INPUT;
         }, DATE_DAY);
 
         if (!dateSelected) throw new Error(`Date ${DATE_DAY} not available.`);
-        await page.waitForTimeout(8000); // Increased wait for time slots
+        await page.waitForTimeout(8000);
 
-        // Select Time - Robust handling for _min_ format
         const timeId = TIME_HH_MM.includes('_min_') ? TIME_HH_MM : TIME_HH_MM.replace('_', '_min_');
         const timeSelector = `[id^="hour_${timeId}"], #hour_${timeId}`;
         
-        console.log(`Looking for time selector: ${timeSelector}`);
         const timeBtn = await page.$(timeSelector);
         if (!timeBtn) {
-            await takeScreenshot('time_slots_not_loaded');
-            throw new Error(`Time slot ${TIME_HH_MM} (ID: ${timeId}) not found.`);
+            throw new Error(`Time slot ${TIME_HH_MM} not found in the grid.`);
         }
+
+        // Check if the button is disabled or marked as full
+        const isFull = await page.evaluate((sel) => {
+            const el = document.querySelector(sel);
+            return el.disabled || el.classList.contains('dateNo');
+        }, timeSelector);
+
+        if (isFull) {
+            console.log(`ERROR: Time slot ${TIME_HH_MM} is FULL (Disabled).`);
+            // List some available ones for feedback
+            const available = await page.evaluate(() => {
+                return Array.from(document.querySelectorAll('[id^="hour_"]'))
+                    .filter(el => !el.disabled && !el.classList.contains('dateNo'))
+                    .map(el => el.id.replace('hour_', '').replace('_min_', ':'))
+                    .slice(0, 5);
+            });
+            console.log(`Suggested available times: ${available.join(', ')}`);
+            await takeScreenshot('slot_full_suggestion');
+            process.exit(1);
+        }
+
         await timeBtn.click();
         await page.waitForTimeout(3000);
 
