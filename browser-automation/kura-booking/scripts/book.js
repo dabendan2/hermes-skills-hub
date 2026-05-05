@@ -4,8 +4,8 @@ const path = require('path');
 // Shop Mapping
 const FAVORITE_SHOPS = {
     '土城金城店': '90510',
-    '中壢站前店': '90001', // Example
-    '台中三井店': '90100'  // Example
+    '中壢站前店': '90001',
+    '台中三井店': '90100'
 };
 
 // Usage: node book.js <SHOP_ID_OR_NAME> <DATE_DAY> <TIME_HH_MM> <PEOPLE_COUNT>
@@ -19,7 +19,6 @@ if (!SHOP_INPUT || !DATE_DAY || !TIME_HH_MM || !PEOPLE_COUNT) {
     process.exit(1);
 }
 
-// Resolve Shop ID
 const SHOP_ID = FAVORITE_SHOPS[SHOP_INPUT] || SHOP_INPUT;
 
 (async () => {
@@ -37,7 +36,7 @@ const SHOP_ID = FAVORITE_SHOPS[SHOP_INPUT] || SHOP_INPUT;
     };
 
     try {
-        console.log(`Booking for Shop: ${SHOP_INPUT} (ID: ${SHOP_ID}), Date: ${DATE_DAY}, Time: ${TIME_HH_MM}, People: ${PEOPLE_COUNT}`);
+        console.log(`Attempting reservation for ${SHOP_INPUT} (${SHOP_ID}) on day ${DATE_DAY} at ${TIME_HH_MM} for ${PEOPLE_COUNT} people.`);
 
         // Login
         await page.goto('https://e-pai-ke.com/login', { waitUntil: 'networkidle' });
@@ -49,22 +48,14 @@ const SHOP_ID = FAVORITE_SHOPS[SHOP_INPUT] || SHOP_INPUT;
         // Navigate to Shop
         await page.goto(`https://e-pai-ke.com/shop/${SHOP_ID}`, { waitUntil: 'networkidle' });
         
-        // Duplicate Check with details
         const bodyText = await page.innerText('body');
         if (bodyText.includes('已完成候位')) {
             console.log('ERROR: Already have an active reservation for this shop.');
-            // Try to extract existing reservation details from the sidebar if possible
-            const reservationDetails = await page.evaluate(() => {
-                const sidebar = document.querySelector('.shop-side-info, .side-content');
-                return sidebar ? sidebar.innerText : 'Details not found in sidebar';
-            });
-            console.log(`Existing Reservation Info:\n${reservationDetails}`);
-            await takeScreenshot('duplicate_reservation_details');
-            process.exit(0); // Exit gracefully as it's a known state
+            await takeScreenshot('duplicate_reservation');
+            process.exit(0);
         }
 
         await page.click('a.bookbtn:has-text("預約")');
-        console.log('Waiting 10s for background data...');
         await page.waitForTimeout(10000);
         
         await page.click('#reserve_date');
@@ -78,11 +69,16 @@ const SHOP_ID = FAVORITE_SHOPS[SHOP_INPUT] || SHOP_INPUT;
         }, DATE_DAY);
 
         if (!dateSelected) throw new Error(`Date ${DATE_DAY} not available.`);
-        await page.waitForTimeout(5000);
+        await page.waitForTimeout(8000);
 
-        // Select Time
-        const timeSelector = `#hour_${TIME_HH_MM}`;
-        if (!await page.$(timeSelector)) throw new Error(`Time slot ${TIME_HH_MM} not found.`);
+        // Select Time (Website uses #hour_HH_min_MM)
+        const timeId = `hour_${TIME_HH_MM.replace('_', '_min_')}`;
+        const timeSelector = `#${timeId}`;
+        
+        if (!await page.$(timeSelector)) {
+            const available = await page.evaluate(() => Array.from(document.querySelectorAll('[id^="hour_"]')).map(el => el.id));
+            throw new Error(`Time slot ${timeId} not found. Available slots: ${available.join(', ')}`);
+        }
         await page.click(timeSelector);
         await page.waitForTimeout(3000);
 
@@ -95,13 +91,14 @@ const SHOP_ID = FAVORITE_SHOPS[SHOP_INPUT] || SHOP_INPUT;
         }, PEOPLE_COUNT);
         await page.waitForTimeout(2000);
         
+        // Confirmations
         await page.click('#orderOK');
         await page.waitForTimeout(5000);
         await page.click('#orderOK');
         await page.waitForTimeout(10000);
         
         await takeScreenshot('booking_result');
-        console.log('Booking process completed.');
+        console.log('Booking process completed successfully.');
 
     } catch (error) {
         console.error('Booking failed:', error.message);
