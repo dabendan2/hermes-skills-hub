@@ -1,15 +1,7 @@
 const { chromium } = require('playwright');
 const path = require('path');
 
-// Usage: node cancel.js <DATE_STRING>
-// Example: node cancel.js "05月 07"
-const TARGET_DATE = process.argv[2];
-
-if (!TARGET_DATE) {
-    console.error('Usage: node cancel.js <DATE_STRING>');
-    console.error('Example: node cancel.js "05月 07"');
-    process.exit(1);
-}
+const SEARCH_PARTS = process.argv.slice(2);
 
 (async () => {
     const browser = await chromium.launch({ headless: true });
@@ -19,69 +11,73 @@ if (!TARGET_DATE) {
     });
     const page = await context.newPage();
 
-    const takeScreenshot = async (name) => {
-        const screenshotPath = path.resolve(process.cwd(), `${name}.png`);
-        await page.screenshot({ path: screenshotPath });
-        console.log(`MEDIA:${screenshotPath}`);
-    };
-
     try {
-        console.log(`Searching for reservation on: ${TARGET_DATE}`);
-
-        // 1. Login
         await page.goto('https://e-pai-ke.com/login', { waitUntil: 'networkidle' });
         await page.fill('input[placeholder="電子郵件"]', process.env.E_PAI_KE_EMAIL);
         await page.fill('input[placeholder="密碼"]', process.env.E_PAI_KE_PASSWORD);
         await page.click('button:has-text("登入")');
         await page.waitForTimeout(5000);
 
-        // 2. Go to Reservations page
         await page.goto('https://e-pai-ke.com/reservationA', { waitUntil: 'networkidle' });
         await page.waitForTimeout(3000);
 
-        // 3. Find specific card and its cancel button
-        const cancelBtnSelector = await page.evaluate((targetDate) => {
-            // Find all reservation cards
-            const cards = Array.from(document.querySelectorAll('.reservation-card, .res-card, .item-card')); // Adjusting for common classes
-            // If the above generic classes don't work, we search for the text container
-            const allElements = Array.from(document.querySelectorAll('div, section, li'));
-            
-            for (const el of allElements) {
-                if (el.innerText && el.innerText.includes(targetDate)) {
-                    // Find the nearest cancel button within this container or its siblings
-                    const parent = el.closest('.reservation-card') || el.parentElement;
-                    const btn = parent.querySelector('.cancelBtn') || parent.parentElement.querySelector('.cancelBtn');
-                    if (btn) {
-                        // Return a unique identifier or just click it here
+        // Find the card that contains the target parts
+        const cancelResult = await page.evaluate((parts) => {
+            const allDivs = Array.from(document.querySelectorAll('div, li, section'));
+            for (const div of allDivs) {
+                // We look for a small enough container that contains the date info
+                if (div.innerText && parts.every(p => div.innerText.includes(p))) {
+                    // Find a button or link with cancelBtn class nearby
+                    // Check descendants first
+                    let btn = div.querySelector('.cancelBtn') || div.querySelector('button, a');
+                    if (btn && (btn.innerText.includes('取消') || btn.classList.contains('cancelBtn'))) {
                         btn.click();
-                        return true;
+                        return { success: true, method: 'descendant' };
+                    }
+                    // Check siblings or parent's descendants
+                    let parent = div.parentElement;
+                    for (let i = 0; i < 3; i++) { // search up to 3 levels
+                        if (!parent) break;
+                        btn = parent.querySelector('.cancelBtn');
+                        if (btn) {
+                            btn.click();
+                            return { success: true, method: 'ancestor-search' };
+                        }
+                        parent = parent.parentElement;
                     }
                 }
             }
-            return false;
-        }, TARGET_DATE);
+            return { success: false };
+        }, SEARCH_PARTS);
 
-        if (cancelBtnSelector) {
-            console.log(`Found and clicked cancel button for ${TARGET_DATE}.`);
+        if (cancelResult.success) {
+            console.log(`Cancel button found via ${cancelResult.method}. Handling confirmation...`);
             await page.waitForTimeout(2000);
             
-            // Handle confirmation
+            // Handle native alert
+            page.on('dialog', async dialog => {
+                console.log(`Alert: ${dialog.message()}`);
+                await dialog.accept();
+            });
+
+            // Handle custom modal
             const confirmBtn = await page.$('button:has-text("確認"), button:has-text("OK"), .confirmBtn');
             if (confirmBtn) {
                 await confirmBtn.click();
-                console.log('Confirmed cancellation.');
+                console.log('Confirmed in modal.');
             }
             
             await page.waitForTimeout(5000);
-            await takeScreenshot(`cancelled_${TARGET_DATE.replace(/ /g, '_')}`);
-            console.log(`SUCCESS: Reservation for ${TARGET_DATE} processed.`);
+            const screenshotPath = path.resolve(process.cwd(), 'final_cancellation.png');
+            await page.screenshot({ path: screenshotPath });
+            console.log(`MEDIA:${screenshotPath}`);
+            console.log('Cancellation process finished.');
         } else {
-            console.log(`ERROR: No reservation found for date: ${TARGET_DATE}`);
-            await takeScreenshot('cancel_failed_not_found');
+            console.log('Target reservation not found.');
         }
 
     } catch (error) {
-        console.error('Cancellation failed:', error.message);
+        console.error('Error:', error.message);
     } finally {
         await browser.close();
     }
